@@ -2,12 +2,15 @@ import { renderBadge, resolveBadgeStyle } from "@/lib/svg/badge";
 import { getCacheHeaders } from "@/lib/cache";
 import { SITE, SITE_ROUTES } from "@/lib/site";
 import {
+  formatMilliseconds,
   formatPercentage,
   type StatusReport,
   type StatusLevel,
 } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
+
+type StatusBadgeMetric = "uptime" | "response";
 
 function toneForStatus(status: StatusLevel): string {
   switch (status) {
@@ -36,7 +39,15 @@ async function fetchStatusReport(request: Request): Promise<StatusReport> {
   return (await response.json()) as StatusReport;
 }
 
-function getWindowValue(report: StatusReport, period: string): string {
+function getBadgeValue(
+  report: StatusReport,
+  metric: StatusBadgeMetric,
+  period: string,
+): string {
+  if (metric === "response") {
+    return formatMilliseconds(report.overall.averageApiResponseMs);
+  }
+
   const uptime = period === "7d"
     ? report.overall.uptime7d
     : report.overall.uptime24h;
@@ -44,23 +55,26 @@ function getWindowValue(report: StatusReport, period: string): string {
   return formatPercentage(uptime);
 }
 
-function getWindowLabel(period: string): string {
+function getBadgeLabel(metric: StatusBadgeMetric, period: string): string {
+  if (metric === "response") return "api response";
   return period === "7d" ? "7d uptime" : "24h uptime";
 }
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const style = resolveBadgeStyle(params.get("style"));
+  const metric: StatusBadgeMetric =
+    params.get("metric") === "response" ? "response" : "uptime";
   const period = params.get("period") === "7d" ? "7d" : "24h";
 
   try {
     const report = await fetchStatusReport(request);
-    const uptimeValue = getWindowValue(report, period);
+    const badgeValue = getBadgeValue(report, metric, period);
     const accent = toneForStatus(report.overall.status);
 
     const svg = renderBadge(
-      getWindowLabel(period),
-      uptimeValue,
+      getBadgeLabel(metric, period),
+      badgeValue,
       { accent, labelBg: "555", text: "fff" },
       style,
     );
@@ -76,7 +90,7 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const fallback = renderBadge(
-      getWindowLabel(period),
+      getBadgeLabel(metric, period),
       "unknown",
       { accent: "8b949e", labelBg: "555", text: "fff" },
       style,

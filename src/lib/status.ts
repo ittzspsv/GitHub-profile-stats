@@ -44,6 +44,7 @@ export type StatusReport = {
     uptime24h: number | null;
     uptime7d: number | null;
     averageResponseMs: number | null;
+    averageApiResponseMs: number | null;
     healthyCount: number;
     totalCount: number;
   };
@@ -287,6 +288,9 @@ export async function collectStatusReport(): Promise<StatusReport> {
   }
 
   const allHistory = Array.from(histories.values()).flat();
+  const apiSnapshots = snapshots.filter((snapshot) =>
+    snapshot.path.startsWith("/api/"),
+  );
 
   return {
     checkedAt,
@@ -295,6 +299,7 @@ export async function collectStatusReport(): Promise<StatusReport> {
       uptime24h: computeUptime(allHistory, HISTORY_WINDOW_MS.day),
       uptime7d: computeUptime(allHistory, HISTORY_WINDOW_MS.week),
       averageResponseMs: computeAverageResponseMs(snapshots),
+      averageApiResponseMs: computeAverageResponseMs(apiSnapshots),
       healthyCount,
       totalCount,
     },
