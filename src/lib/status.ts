@@ -171,30 +171,56 @@ async function storeSnapshot(snapshot: StatusEndpointSnapshot): Promise<void> {
 
   await redis
     .multi()
-    .lpush(key, JSON.stringify(record))
+    .lpush(key, record)
     .ltrim(key, 0, HISTORY_LIMIT - 1)
     .expire(key, HISTORY_TTL_SECONDS)
     .exec();
+}
+
+function parseHistoryEntry(entry: unknown): StatusHistoryEntry | null {
+  let parsed = entry;
+
+  if (typeof entry === "string") {
+    try {
+      parsed = JSON.parse(entry) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const candidate = parsed as Partial<StatusHistoryEntry>;
+  const hasValidStatus =
+    candidate.status === null || typeof candidate.status === "number";
+  const hasValidResponseTime =
+    candidate.responseTimeMs === null ||
+    typeof candidate.responseTimeMs === "number";
+
+  if (
+    typeof candidate.checkedAt !== "string" ||
+    typeof candidate.ok !== "boolean" ||
+    !hasValidStatus ||
+    !hasValidResponseTime
+  ) {
+    return null;
+  }
+
+  return candidate as StatusHistoryEntry;
 }
 
 async function readHistory(key: StatusEndpointKey): Promise<StatusHistoryEntry[]> {
   const redis = getRedis();
   if (!redis) return [];
 
-  const rawEntries = await redis.lrange<string>(
+  const rawEntries = await redis.lrange<StatusHistoryEntry | string>(
     `status:history:${key}`,
     0,
     HISTORY_LIMIT - 1,
   );
 
   return rawEntries
-    .map((entry) => {
-      try {
-        return JSON.parse(entry) as StatusHistoryEntry;
-      } catch {
-        return null;
-      }
-    })
+    .map(parseHistoryEntry)
     .filter((entry): entry is StatusHistoryEntry => entry !== null);
 }
 
@@ -208,7 +234,7 @@ function computeUptime(
   if (recent.length === 0) return null;
 
   const healthy = recent.filter((entry) => entry.ok).length;
-  return Math.round((healthy / recent.length) * 1000) / 10;
+  return (healthy / recent.length) * 100;
 }
 
 function computeAverageResponseMs(
@@ -260,31 +286,14 @@ export async function collectStatusReport(): Promise<StatusReport> {
     status = "degraded";
   }
 
-  const uptime24hValues = endpoints
-    .map((endpoint) => endpoint.uptime24h)
-    .filter((value): value is number => typeof value === "number");
-  const uptime7dValues = endpoints
-    .map((endpoint) => endpoint.uptime7d)
-    .filter((value): value is number => typeof value === "number");
+  const allHistory = Array.from(histories.values()).flat();
 
   return {
     checkedAt,
     overall: {
       status,
-      uptime24h:
-        uptime24hValues.length > 0
-          ? Math.round(
-              uptime24hValues.reduce((sum, value) => sum + value, 0) /
-                uptime24hValues.length,
-            )
-          : null,
-      uptime7d:
-        uptime7dValues.length > 0
-          ? Math.round(
-              uptime7dValues.reduce((sum, value) => sum + value, 0) /
-                uptime7dValues.length,
-            )
-          : null,
+      uptime24h: computeUptime(allHistory, HISTORY_WINDOW_MS.day),
+      uptime7d: computeUptime(allHistory, HISTORY_WINDOW_MS.week),
       averageResponseMs: computeAverageResponseMs(snapshots),
       healthyCount,
       totalCount,
